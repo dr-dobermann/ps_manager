@@ -49,11 +49,12 @@ namespace psm {
         FAST_BLINK_TIMEOUT = 250;
 
     const uint8_t
-        P_PUMP      = 5,  // SS-Relay Water pump Pin
-        P_WL_SENSOR = A2, // Water leak sensor
-        P_PS_SENSOR = 6,  // Power Supply sensor
-        P_VLV_OFF   = 7,  // Water valve close relay
-        P_VLV_ON    = 8;  // Water valve open relay
+        P_PUMP      = 5,    // SS-Relay Water pump Pin
+        P_WL_ASENSOR = A2,  // Water leak sensor (Analogue)
+        P_WL_DSENSOR = 9,   // Water leak sensor (Digital)
+        P_PS_SENSOR = 6,    // Power Supply sensor
+        P_VLV_OPEN  = 7,    // Water valve close relay
+        P_VLV_CLOSE = 5;    // Water valve open relay
         
     class PSManager {
         public: 
@@ -63,20 +64,25 @@ namespace psm {
                
         private:
             PSMState state;
+            ValveState v_state;
 
             uint64_t timeout,
                      blink_timeout;
 
-            uint8_t step_counts[6];
-            uint8_t step_counter;
-
+            // state functions
             PSMState start();
             PSMState run();
             PSMState close();
             PSMState notify();
             PSMState suspend();
 
+            // utility functions
+            void setTout(uint64_t delay_millis);
             void blink(BlinkMode mode);
+
+            void turnPumpOn();
+            void turnPumpOff();
+            
     };  // class PSManager
     
 }; // namespace psm

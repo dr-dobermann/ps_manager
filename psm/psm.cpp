@@ -16,14 +16,20 @@ using namespace psm;
 /**
  * PSManager initializes the Pump Station Manager
  */
-PSManager::PSManager() :
-     step_counts{1, 5, 5, 0, 0, 0} {
+PSManager::PSManager() {
 
     state = psStart;
-    timeout = MIN_TIMEOUT;
+    v_state = vsClosed;
+    
+    timeout = 0;
     blink_timeout = 0;
 
-    step_counter = 0;
+    pinMode(P_PUMP, OUTPUT);
+    pinMode(P_WL_ASENSOR, INPUT);
+    pinMode(P_WL_DSENSOR, INPUT);
+    pinMode(P_PS_SENSOR, INPUT);
+    pinMode(P_VLV_OPEN, OUTPUT);
+    pinMode(P_VLV_CLOSE, OUTPUT);
 }
 //-------------------------------------------------------------
 
@@ -32,7 +38,7 @@ PSManager::PSManager() :
  *   dispatches the workflow according the current state
  */
 void PSManager::exec() {
-    
+
     // display the state over the blink
     switch (state) {
         case psStart:
@@ -55,42 +61,33 @@ void PSManager::exec() {
     if (millis() < timeout)
         return;
 
-    PSMState currState = state;
+    Serial.println(state);
+    
     switch (state) {
         case psStart:
             state = start();
-            if (state == psStart)
-                timeout = millis() + RESTART_TIMEOUT;
             break;
             
         case psRun:
             state = this->run();
-            if (state == psRun)
-                timeout = millis() + MIN_TIMEOUT;
             break;
 
         case psWL_Alarm:
             state = this->close();
-            timeout = millis() + MIN_TIMEOUT;
             break;
 
         case psClosed:
             state = notify();
-            timeout = millis() + RESTART_TIMEOUT;
             break;
 
         case psPS_Alarm:
             state = suspend();
-            timeout = millis() + MIN_TIMEOUT;
             break;
            
         default:
-            timeout = millis() + MIN_TIMEOUT;
+            setTout(MIN_TIMEOUT);
             break;
     }
-
-    if ( currState != state)
-        step_counter = 0;
 }
 //-------------------------------------------------------------
 
@@ -102,9 +99,36 @@ void PSManager::exec() {
  */
 PSMState PSManager::start() {
 
-    if ( step_counter++ >= step_counts[psStart])
+    Serial.println("start");
+    
+    if ( analogRead(P_WL_ASENSOR) < 500 || digitalRead(P_WL_DSENSOR) == LOW ) { // wait for WL sensor to dry  ) { // || 
+        Serial.println("could not open the valve. Water leak is present");
+        setTout(RESTART_TIMEOUT);
+        turnPumpOff();
+        
+        return psStart;
+    }
+
+    if ( v_state == vsClosed ) {
+        Serial.println("opening...");
+        v_state = vsOpening;
+        digitalWrite(P_VLV_OPEN, false); // Low state relay need's low level to contact
+        digitalWrite(P_VLV_CLOSE, true);
+        setTout(VALVE_MAX_TIMEOUT);
+
+        return psStart;
+    }
+    
+    if ( v_state == vsOpening ) {
+        Serial.println("opened");
+        v_state = vsOpened;
+        digitalWrite(P_VLV_OPEN, true); // Turn off the opening relay
+        turnPumpOn();
+        setTout(0);
+
         return psRun;
-      
+    }
+        
     return psStart;
 }
 //-------------------------------------------------------------
@@ -118,8 +142,19 @@ PSMState PSManager::start() {
  */
 PSMState PSManager::run() {
 
-    if ( step_counter++ >= step_counts[psRun])
+    Serial.println("run");
+
+    if ( analogRead(P_WL_ASENSOR) < 500 || digitalRead(P_WL_DSENSOR) == LOW ) {
+        setTout(0);
         return psWL_Alarm;
+    }
+
+//    if ( digitalRead(P_PS_SENSOR) == LOW ) {
+//        setTout(0);
+//        return psPS_Alarm;
+//    }
+        
+    setTout(MIN_TIMEOUT);
         
     return psRun;
 }
@@ -130,8 +165,27 @@ PSMState PSManager::run() {
  */
 PSMState PSManager::close() {
 
-    if ( step_counter++ >= step_counts[psWL_Alarm])
+    Serial.println("close");
+
+    if ( v_state == vsOpened ) {
+        turnPumpOff();
+        Serial.println("closing...");
+        v_state = vsClosing;
+        digitalWrite(P_VLV_CLOSE, false); // Low state relay need's low level to contact
+        digitalWrite(P_VLV_OPEN, true);
+        setTout(VALVE_MAX_TIMEOUT);
+
+        return psWL_Alarm;
+    }
+
+    if ( v_state == vsClosing ) {
+        Serial.println("closed");
+        v_state = vsClosed;
+        digitalWrite(P_VLV_CLOSE, true); // Turn off the closing relay
+        setTout(0);
+            
         return psClosed;
+    }
 
     return psWL_Alarm;
 }
@@ -141,6 +195,10 @@ PSMState PSManager::close() {
  * notify sends an alarm messages
  */
 PSMState PSManager::notify() {
+    
+    Serial.println("notify");
+
+    setTout(RESTART_TIMEOUT);
     
     return psClosed;
 }
@@ -152,8 +210,18 @@ PSMState PSManager::notify() {
  * 
  */
 PSMState PSManager::suspend() {
-    
+
+    Serial.println("suspend");
+
     return psStart;
+}
+//-------------------------------------------------------------
+
+void PSManager::setTout(uint64_t delay_millis) {
+    
+    timeout = millis() + delay_millis;
+    Serial.print("new timeout: "); 
+    Serial.println((long)timeout);
 }
 //-------------------------------------------------------------
 
@@ -180,6 +248,20 @@ void PSManager::blink(BlinkMode mode) {
 
     if ( digitalRead(LED_BUILTIN) != newValue)
         digitalWrite(LED_BUILTIN, newValue);
+}
+//-------------------------------------------------------------
+
+void PSManager::turnPumpOn() {
+    
+    if ( digitalRead(P_PUMP) != HIGH )
+        digitalWrite(P_PUMP, HIGH);
+}
+//-------------------------------------------------------------
+
+void PSManager::turnPumpOff() {
+    
+    if ( digitalRead(P_PUMP) != LOW )
+        digitalWrite(P_PUMP, LOW);
 }
 //-------------------------------------------------------------
 
