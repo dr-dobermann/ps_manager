@@ -15,22 +15,17 @@
 #include <Arduino.h>
 
 namespace psm {
+
+    const bool 
+        ON = true,
+        OFF = false;
   
     // States of the Pump Station Manager
     typedef enum {
         psStart,
         psRun,
-        psWL_Alarm,  // Water leak alarm
-        psPS_Alarm,  // Power Supply alarm
-        psClosed,    // State after psWLAlarm
-        psSuspended, // State after psPSAlarm
+        psValveOperating,   // State while valve closing/opening
     } PSMState;
-
-    typedef enum {
-        bmOn,
-        bmOff,
-        bmToggle
-    } BlinkMode;
 
     typedef enum {
         vsOpening,
@@ -38,23 +33,35 @@ namespace psm {
         vsClosing,
         vsClosed
     } ValveState;
-        
-    const int64_t
-        MIN_TIMEOUT         = 1000,
-        RESTART_TIMEOUT     = 10*1000,
 
+    typedef enum {
+        vcOff,
+        vcOn,
+        vcPowerOff,
+    } ValveControl;
+
+    const int64_t
+        NORMAL_TIMEOUT = 1000,
+        ERROR_TIMEOUT  = 10*1000,   // timeout while error state detected
+        ALARM_TIMEOUT  = 30*1000,
+        
         // the Valve needs up to 15 secs to open or close
-        VALVE_MAX_TIMEOUT  = 15*1000,
-        BLINK_TIMEOUT      = 500,
-        FAST_BLINK_TIMEOUT = 250;
+        VALVE_TIMEOUT  = 15*1000;
+
+    typedef enum {
+        dtDisplay,
+        dtAlarm,
+        dtCheck,
+    } DeadlineType;
 
     const uint8_t
-        P_PUMP      = 5,    // SS-Relay Water pump Pin
-        P_WL_ASENSOR = A2,  // Water leak sensor (Analogue)
-        P_WL_DSENSOR = 9,   // Water leak sensor (Digital)
-        P_PS_SENSOR = 6,    // Power Supply sensor
-        P_VLV_OPEN  = 7,    // Water valve close relay
-        P_VLV_CLOSE = 5;    // Water valve open relay
+        P_PUMP       = 4,    // SSR Water pump Pin
+        P_WL_ASENSOR = A2,   // Water leak sensor (Analogue)
+        P_WL_DSENSOR = 12,   // Water leak sensor (Digital)
+        P_BEEPER     = 7,    // Bepeer
+        P_PS_SENSOR  = 8,    // Power Supply sensor
+        P_VLV_OPEN   = 5,    // Water valve closing SSR
+        P_VLV_CLOSE  = 6;    // Water valve opening SSR
         
     class PSManager {
         public: 
@@ -66,22 +73,33 @@ namespace psm {
             PSMState state;
             ValveState v_state;
 
-            uint64_t timeout,
-                     blink_timeout;
+            bool PS_Alarm,
+                 WL_Alarm;
+
+            uint64_t check_deadline,
+                     display_deadline,
+                     alarm_deadline;
 
             // state functions
             PSMState start();
             PSMState run();
-            PSMState close();
-            PSMState notify();
-            PSMState suspend();
+            PSMState valveOperating();
 
             // utility functions
-            void setTout(uint64_t delay_millis);
-            void blink(BlinkMode mode);
+            void setDeadline(uint64_t timeout, DeadlineType dtype);
+            bool closeAll();
+            bool openAll();
 
-            void turnPumpOn();
-            void turnPumpOff();
+            void pumpControl(bool ctl);
+            void valveControl(ValveControl ctl);
+
+            void display();
+            void alarm();
+
+            // checking functions
+            // return true if Water Leak or Power Supply Interrupt are detected
+            bool checkWLeak();
+            bool checkPSError();
             
     };  // class PSManager
     

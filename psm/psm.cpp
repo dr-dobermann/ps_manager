@@ -19,249 +19,202 @@ using namespace psm;
 PSManager::PSManager() {
 
     state = psStart;
-    v_state = vsClosed;
-    
-    timeout = 0;
-    blink_timeout = 0;
+
+    display_deadline = 0;
+    check_deadline = 0;
+    alarm_deadline = 0;
 
     pinMode(P_PUMP, OUTPUT);
+    
     pinMode(P_WL_ASENSOR, INPUT);
     pinMode(P_WL_DSENSOR, INPUT);
+
     pinMode(P_PS_SENSOR, INPUT);
+    
     pinMode(P_VLV_OPEN, OUTPUT);
     pinMode(P_VLV_CLOSE, OUTPUT);
+
+    pinMode(P_BEEPER, OUTPUT);
 }
 //-------------------------------------------------------------
 
 /**            
- * exec executes the main state loop and 
- *   dispatches the workflow according the current state
+ * executes the main state loop and 
+ * dispatches the workflow according the current state
  */
 void PSManager::exec() {
 
-    // display the state over the blink
-    switch (state) {
+    this->display();
+
+    switch ( this->state ) {
         case psStart:
-            this->blink(bmOn);
+            this->state = this->start();
             break;
-            
+
         case psRun:
-        case psWL_Alarm:
-            if (blink_timeout < millis()) {
-                this->blink(bmToggle);
-                blink_timeout = millis() + (state == psRun ? BLINK_TIMEOUT : FAST_BLINK_TIMEOUT);
-            }
+            this->state = this->run();
             break;
 
-        default:
-            this->blink(bmOff);
-            break;            
-    };
-    
-    if (millis() < timeout)
-        return;
-
-    Serial.println(state);
-    
-    switch (state) {
-        case psStart:
-            state = start();
-            break;
-            
-        case psRun:
-            state = this->run();
-            break;
-
-        case psWL_Alarm:
-            state = this->close();
-            break;
-
-        case psClosed:
-            state = notify();
-            break;
-
-        case psPS_Alarm:
-            state = suspend();
-            break;
-           
-        default:
-            setTout(MIN_TIMEOUT);
+        case psValveOperating:
+            this->state = this->valveOperating();
             break;
     }
 }
 //-------------------------------------------------------------
 
 /**
- * start starts the psm and move it into the run state if everythin is ok.
- * Returns false in case of errors 
- * 
- * it opens the water tank valve and powers up the water pump if the water leak sensor is ok
- */
+ * starts the psm, closes pump and valve.
+*/
 PSMState PSManager::start() {
-
-    Serial.println("start");
     
-    if ( analogRead(P_WL_ASENSOR) < 500 || digitalRead(P_WL_DSENSOR) == LOW ) { // wait for WL sensor to dry  ) { // || 
-        Serial.println("could not open the valve. Water leak is present");
-        setTout(RESTART_TIMEOUT);
-        turnPumpOff();
-        
-        return psStart;
-    }
-
-    if ( v_state == vsClosed ) {
-        Serial.println("opening...");
-        v_state = vsOpening;
-        digitalWrite(P_VLV_OPEN, false); // Low state relay need's low level to contact
-        digitalWrite(P_VLV_CLOSE, true);
-        setTout(VALVE_MAX_TIMEOUT);
-
-        return psStart;
-    }
+    v_state = vsOpened;
     
-    if ( v_state == vsOpening ) {
-        Serial.println("opened");
-        v_state = vsOpened;
-        digitalWrite(P_VLV_OPEN, true); // Turn off the opening relay
-        turnPumpOn();
-        setTout(0);
+    closeAll();
 
-        return psRun;
-    }
-        
-    return psStart;
+    return psValveOperating;
 }
 //-------------------------------------------------------------
 
-/**
- * run runs the main application loop
- * 
- * checks following sensors:
- *   the water leak sensor. If it fires, the state changes to psWL_Alarm
- *   the power supply sensor. If it fires, the state changes to psPS_Alarm
- */
 PSMState PSManager::run() {
 
-    Serial.println("run");
+    if ( check_deadline > millis() )
+        return psRun;
 
-    if ( analogRead(P_WL_ASENSOR) < 500 || digitalRead(P_WL_DSENSOR) == LOW ) {
-        setTout(0);
-        return psWL_Alarm;
-    }
+    PS_Alarm = checkPSError();
+    WL_Alarm = checkWLeak();
 
-//    if ( digitalRead(P_PS_SENSOR) == LOW ) {
-//        setTout(0);
-//        return psPS_Alarm;
-//    }
-        
-    setTout(MIN_TIMEOUT);
-        
+    setDeadline(PS_Alarm || WL_Alarm ? ERROR_TIMEOUT : NORMAL_TIMEOUT, dtCheck);
+    
+    if ( PS_Alarm && closeAll() )
+        return psValveOperating;
+
+    if ( WL_Alarm ) {
+        if ( closeAll() )
+            return psValveOperating;
+    } else
+        if ( openAll() )
+            return psValveOperating;
+            
     return psRun;
 }
 //-------------------------------------------------------------
 
-/**
- * close closes the water tank valve and powers off the pump
- */
-PSMState PSManager::close() {
+PSMState PSManager::valveOperating() {
+    
+    if ( check_deadline > millis() )
+        return psValveOperating;
 
-    Serial.println("close");
-
-    if ( v_state == vsOpened ) {
-        turnPumpOff();
-        Serial.println("closing...");
-        v_state = vsClosing;
-        digitalWrite(P_VLV_CLOSE, false); // Low state relay need's low level to contact
-        digitalWrite(P_VLV_OPEN, true);
-        setTout(VALVE_MAX_TIMEOUT);
-
-        return psWL_Alarm;
-    }
-
+    valveControl(vcPowerOff);
+    
     if ( v_state == vsClosing ) {
-        Serial.println("closed");
         v_state = vsClosed;
-        digitalWrite(P_VLV_CLOSE, true); // Turn off the closing relay
-        setTout(0);
-            
-        return psClosed;
     }
-
-    return psWL_Alarm;
+    else if ( v_state == vsOpening )
+        v_state = vsOpened;
+    
+    return psRun;
 }
 //-------------------------------------------------------------
 
-/**
- * notify sends an alarm messages
- */
-PSMState PSManager::notify() {
+void PSManager::display() {
     
-    Serial.println("notify");
+    if ( display_timeout > millis() )
+        return;
 
-    setTout(RESTART_TIMEOUT);
+    setDeadline(NORMAL_TIMEOUT, dtDisplay);
+
     
-    return psClosed;
 }
 //-------------------------------------------------------------
 
-/*
- * suspend closes the water tank valve and powers off the pump
- * after this it sends arduino to sleep with wakeup interrupt on power supply pin
- * 
- */
-PSMState PSManager::suspend() {
-
-    Serial.println("suspend");
-
-    return psStart;
+void PSManager::alarm() {
+    
 }
 //-------------------------------------------------------------
 
-void PSManager::setTout(uint64_t delay_millis) {
+bool PSManager::closeAll() {
     
-    timeout = millis() + delay_millis;
-    Serial.print("new timeout: "); 
-    Serial.println((long)timeout);
+    if ( v_state == vsClosing || v_state == vsOpening || v_state == vsClosed )
+        return false;
+    
+    pumpControl(psm::OFF);
+    valveControl(vcOff);
+    
+    setDeadline(psm::VALVE_TIMEOUT, dtCheck);
+
+    return true;
 }
 //-------------------------------------------------------------
 
-/*
- * blink turns on or off the Arduino builtin led
- */
-void PSManager::blink(BlinkMode mode) {
+bool PSManager::openAll() {
     
-    bool newValue = false;
+    if ( v_state == vsClosing || v_state == vsOpening || v_state == vsOpened )
+        return false;
+
+    pumpControl(psm::ON);
+    valveControl(vcOn);
     
-    switch (mode) {
-        case bmOn:
-            newValue = HIGH;
+    setDeadline(psm::VALVE_TIMEOUT, dtCheck);
+
+    return true;
+}
+//-------------------------------------------------------------
+
+void PSManager::pumpControl(bool ctl) {
+
+    digitalWrite(P_PUMP, ctl);
+}
+//-------------------------------------------------------------
+
+void PSManager::valveControl(ValveControl ctl) {
+
+    switch ( ctl ) { 
+        case vcOn: // open valve
+            digitalWrite(P_VLV_CLOSE, false);
+            digitalWrite(P_VLV_OPEN, true);
+            v_state = vsOpening;
             break;
 
-        case bmOff:
-            newValue = LOW;
+        case vcOff: // close valve
+            digitalWrite(P_VLV_OPEN, false);
+            digitalWrite(P_VLV_CLOSE, true);
+            v_state = vsClosing;
             break;
 
-        default: // toggle
-            newValue = !digitalRead(LED_BUILTIN);
+        case vcPowerOff:
+            digitalWrite(P_VLV_OPEN, false);
+            digitalWrite(P_VLV_CLOSE, false);
             break;
     }
-
-    if ( digitalRead(LED_BUILTIN) != newValue)
-        digitalWrite(LED_BUILTIN, newValue);
 }
 //-------------------------------------------------------------
 
-void PSManager::turnPumpOn() {
+bool PSManager::checkWLeak() {
     
-    if ( digitalRead(P_PUMP) != HIGH )
-        digitalWrite(P_PUMP, HIGH);
+    return (analogRead(P_WL_ASENSOR) > 500 || digitalRead(P_WL_DSENSOR) == HIGH);
 }
 //-------------------------------------------------------------
 
-void PSManager::turnPumpOff() {
+bool PSManager::checkPSError() {
     
-    if ( digitalRead(P_PUMP) != LOW )
-        digitalWrite(P_PUMP, LOW);
+    return (digitalRead(P_PS_SENSOR) == LOW);
 }
 //-------------------------------------------------------------
 
+void PSManager::setDeadline(uint64_t timeout, DeadlineType dtype) {
+    
+    switch (dtype) {
+        case dtAlarm:
+            alarm_deadline = millis() + timeout;
+            break;
+
+        case dtDisplay:
+            display_deadline = millis() + timeout;
+            break;
+
+        case dtCheck:
+            check_deadline = millis() + timeout;
+            break;
+    }
+}
+//-------------------------------------------------------------
