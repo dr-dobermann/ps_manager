@@ -76,6 +76,8 @@ namespace psm {
             bool PS_Alarm,
                  WL_Alarm;
 
+            bool toneOn;
+
             uint64_t check_deadline,
                      display_deadline,
                      alarm_deadline;
@@ -95,6 +97,10 @@ namespace psm {
 
             void display();
             void alarm();
+            void stopAlarm();
+
+            void showStatOnDisplay();
+            void showStatOnConsole();
 
             // checking functions
             // return true if Water Leak or Power Supply Interrupt are detected

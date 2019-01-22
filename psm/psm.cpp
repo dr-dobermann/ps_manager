@@ -23,6 +23,7 @@ PSManager::PSManager() {
     display_deadline = 0;
     check_deadline = 0;
     alarm_deadline = 0;
+    toneOn = false;
 
     pinMode(P_PUMP, OUTPUT);
     
@@ -117,18 +118,72 @@ PSMState PSManager::valveOperating() {
 //-------------------------------------------------------------
 
 void PSManager::display() {
-    
-    if ( display_timeout > millis() )
-        return;
 
+    if ( WL_Alarm || PS_Alarm )
+        this->alarm();
+    else
+        stopAlarm();
+
+    if ( display_deadline > millis() )
+        return;
     setDeadline(NORMAL_TIMEOUT, dtDisplay);
 
-    
+
+        
 }
 //-------------------------------------------------------------
 
 void PSManager::alarm() {
+    if ( alarm_deadline > millis() )
+        return;
+    setDeadline(ALARM_TIMEOUT, dtAlarm);
+
+    tone(P_BEEPER, 300, 300);
+    toneOn = true;
+
+    // TODO: send alarm message to MQTT server
+}
+//-------------------------------------------------------------
+
+void PSManager::stopAlarm() {
     
+    if ( alarm_deadline > millis() )
+        return;
+    setDeadline(ALARM_TIMEOUT, dtAlarm);
+    if ( toneOn ) {
+        noTone(P_BEEPER);
+        toneOn = false;
+    }
+
+    // TODO: send ok message to MQTT server
+}
+//-------------------------------------------------------------
+
+void PSManager::showStatOnDisplay() {
+    // TODO: Show state on display
+}
+//-------------------------------------------------------------
+
+void PSManager::showStatOnConsole() {
+
+    Serial.println(PS_Alarm ? "!!! Power supply problem encountered" : "Power Supply is ok");
+    Serial.println(WL_Alarm ? "!!! Water leak detected" : "No water leak");
+
+    Serial.print("Water valve state: ");
+    switch ( v_state ) {
+        case vsClosing:
+            Serial.println("closing...");
+            break;
+        case vsClosed:
+            Serial.println("clossed");
+            break;
+        case vsOpening:
+            Serial.println("opening...");
+            break;
+        case vsOpened:
+            Serial.println("opened");
+            break;
+    }
 }
 //-------------------------------------------------------------
 
